@@ -1,0 +1,2017 @@
+Absolutely. Based on the specification you provided, here is the **complete practical picture of the Listing Quality Score Engine**: what it is, what you need, what you build, the pipeline, data, models, evaluation, repo structure, deliverables, and a realistic implementation order.
+
+The core idea is: **build a 0–100 content-only quality score for every listing, using listing information and photos, without needing bookings or behavioral data.** It is designed specifically to work during the cold-start period and later feed a ranking system. 
+
+---
+
+# 1. What exactly are you building?
+
+You are building a **Python batch engine** that takes a listing and its photos as input and produces:
+
+```text
+Listing
+   │
+   ├── Text
+   ├── Amenities
+   ├── Rooms / capacity
+   ├── Calendar information
+   ├── Price
+   └── Photos
+          │
+          ▼
+   ┌──────────────────────┐
+   │ Quality Score Engine │
+   └──────────────────────┘
+          │
+          ▼
+   Quality Score: 78/100
+          │
+          ├── Photo Quality: 16/20
+          ├── Photo Aesthetic: 13/15
+          ├── Room Coverage: 7/10
+          ├── Amenity Check: 8/10
+          ├── Text Quality: 12/15
+          ├── Completeness: 8/10
+          └── ...
+```
+
+The important thing is that the result is **explainable**, not just:
+
+> Score = 78
+
+It should say things like:
+
+> **78/100**
+>
+> * 2 photos have low sharpness
+> * No bathroom photo detected
+> * Kitchen photo detected
+> * Pool declared and visually detected
+> * Arabic description missing
+> * Description length is good
+> * 8/10 relevant amenities declared
+
+That explainability is explicitly required by the specification. 
+
+---
+
+# 2. The architecture
+
+The clean architecture should be:
+
+```text
+                 DATA PACKAGE
+                      │
+          ┌───────────┴───────────┐
+          │                       │
+      Listings                  Photos
+          │                       │
+          └───────────┬───────────┘
+                      │
+                      ▼
+              FEATURE EXTRACTION
+                      │
+       ┌──────────────┼──────────────┐
+       │              │              │
+       ▼              ▼              ▼
+   Text features   Image features   Metadata
+       │              │              │
+       └──────────────┼──────────────┘
+                      ▼
+              COMPONENT SCORING
+                      │
+       ┌──────────────┼───────────────┐
+       │              │               │
+       ▼              ▼               ▼
+    Photos          Content       Completeness
+       │              │               │
+       └──────────────┼───────────────┘
+                      ▼
+               WEIGHTED SCORE
+                      │
+                      ▼
+                0–100 SCORE
+                      │
+                      ▼
+             EXPLANATION JSON
+                      │
+                      ▼
+               FEATURE TABLE
+```
+
+The feature table is the important output contract: **one row per listing**, containing the quality score and its component information. 
+
+---
+
+# 3. What data do you need?
+
+You are given an anonymized data package.
+
+For each listing, you potentially have:
+
+### Listing information
+
+* `listing_id`
+* vertical
+* city
+* capacity
+* number of rooms
+* declared amenities
+* nightly price
+* title
+* description
+* language information
+* instant-book flag
+* calendar depth
+* iCal state
+
+And separately:
+
+* listing photos
+* city reference data
+
+This is exactly what the provided specification says is included. 
+
+---
+
+# 4. What you DON'T need
+
+This is very important.
+
+You **do not need**:
+
+* bookings
+* clicks
+* impressions
+* CTR
+* guest identities
+* host identities
+* payment data
+* reviews
+* exact addresses
+* production database
+* production API
+* cloud infrastructure
+* GPU
+
+The quality engine must work with **zero bookings**. 
+
+Everything should run locally on a laptop. 
+
+---
+
+# 5. The score components
+
+The specification says the weights are configured and sum to **100**.
+
+The important architectural rule is:
+
+```text
+weights.yaml
+     │
+     ▼
+Score calculator
+```
+
+NOT:
+
+```python
+score = photo * 20 + text * 15
+```
+
+You should have something like:
+
+```yaml
+weights:
+  photo_technical: ...
+  photo_aesthetic: ...
+  room_coverage: ...
+  amenity_check: ...
+  text_quality: ...
+  completeness: ...
+```
+
+The actual weights should come from the supplied specification/config rather than being hard-coded. The document explicitly requires component weights to live in configuration. 
+
+One confirmed high-level fact: **photo-related signals collectively account for 40/100 points**, making computer vision a major part of the system. 
+
+---
+
+# 6. Module 1 — Photo Technical Quality
+
+This is the easiest computer-vision component.
+
+You don't need a neural network here.
+
+Use:
+
+* OpenCV
+* NumPy
+* Pillow
+
+The specification explicitly calls for:
+
+### A. Blur detection
+
+For example:
+
+```text
+image
+  ↓
+grayscale
+  ↓
+Laplacian variance
+  ↓
+sharpness score
+```
+
+A very blurry image:
+
+```text
+variance = low
+```
+
+A sharp image:
+
+```text
+variance = high
+```
+
+You then normalize it to something like:
+
+```text
+0 → terrible
+100 → excellent
+```
+
+---
+
+### B. Exposure
+
+Detect whether the image is:
+
+* too dark
+* too bright
+* reasonably exposed
+
+Using image intensity distributions.
+
+For example:
+
+```text
+Histogram
+      │
+dark ─┼────────────── bright
+      ↑
+   exposure
+```
+
+---
+
+### C. Brightness
+
+Calculate average brightness.
+
+---
+
+### D. Resolution
+
+Check:
+
+```python
+width
+height
+megapixels
+```
+
+Very small photos should receive lower scores.
+
+---
+
+### E. Near duplicates
+
+First use **perceptual hashing**.
+
+For example:
+
+```text
+Photo A ── pHash ──> 101011010...
+Photo B ── pHash ──> 101011000...
+                         │
+                         ▼
+                    very similar
+```
+
+If hashing is too coarse, the specification allows embeddings as a second approach. 
+
+Why?
+
+Because this:
+
+```text
+Bedroom 1
+Bedroom 1 almost identical
+Bedroom 1 almost identical
+Bedroom 1 almost identical
+```
+
+is not as useful as:
+
+```text
+Bedroom
+Bathroom
+Kitchen
+Living room
+Exterior
+Pool
+View
+```
+
+So duplicate-heavy galleries should score lower.
+
+---
+
+# 7. Module 2 — Photo Aesthetic Quality
+
+This is where you use a pretrained model.
+
+The specification says:
+
+> pretrained aesthetic predictor + zero-shot baseline
+
+You should **not train a huge model from scratch**.
+
+The process is:
+
+```text
+Photo
+  ↓
+Pretrained aesthetic model
+  ↓
+raw aesthetic score
+  ↓
+calibration
+  ↓
+normalized score
+```
+
+---
+
+# 8. Calibration dataset
+
+You need approximately:
+
+**200 photos**
+
+with:
+
+* human rating
+* two independent raters
+
+For example:
+
+```text
+photo_001 → 4/5
+photo_002 → 2/5
+photo_003 → 5/5
+...
+```
+
+Then compare:
+
+```text
+Model prediction
+       VS
+Human ratings
+```
+
+and calibrate the model.
+
+The specification explicitly asks for a hand-rated sample of about 200 photos rated independently by two raters. 
+
+---
+
+# 9. Module 3 — Room Coverage
+
+This is one of the most interesting parts.
+
+You need to classify photos into:
+
+```text
+bedroom
+bathroom
+kitchen
+living
+exterior
+pool
+view
+other
+```
+
+The first solution should be **zero-shot classification with a pretrained vision model**. 
+
+Conceptually:
+
+```text
+                 Photo
+                   │
+                   ▼
+           Vision-language model
+                   │
+       ┌───────────┼───────────┐
+       ▼           ▼           ▼
+   bathroom      kitchen     bedroom
+    0.82          0.11        0.04
+```
+
+Then:
+
+```text
+predicted class = bathroom
+confidence = 0.82
+```
+
+---
+
+# 10. The accuracy gate
+
+This is important.
+
+Don't immediately decide:
+
+> CLIP is enough.
+
+You evaluate it.
+
+Create a held-out labeled dataset.
+
+For example:
+
+```text
+500 labeled photos
+
+actual        prediction
+
+bathroom      bathroom       ✓
+kitchen       kitchen        ✓
+bedroom       bathroom       ✗
+...
+```
+
+Then calculate accuracy.
+
+### Required target:
+
+**≥ 85% accuracy**
+
+If the zero-shot model doesn't reach 85%, you use the fallback:
+
+```text
+Pretrained model
+       ↓
+embeddings
+       ↓
+small classifier
+       ↓
+room class
+```
+
+The specification specifically proposes a small classifier trained on cached embeddings, which should train quickly on a laptop CPU. 
+
+---
+
+# 11. Room coverage scoring
+
+Once every photo has a room prediction, aggregate at listing level.
+
+Example:
+
+```text
+Listing #123
+
+Photos:
+✓ bedroom
+✓ bedroom
+✓ kitchen
+✓ living
+✗ bathroom
+✓ exterior
+```
+
+Then:
+
+```text
+covered:
+bedroom
+kitchen
+living
+exterior
+
+missing:
+bathroom
+```
+
+The output should explain:
+
+> **Coverage gap: no bathroom photo detected.**
+
+This is directly aligned with the expected output. 
+
+---
+
+# 12. Module 4 — Amenity Cross-Check
+
+This is another CLIP/vision-language task.
+
+Suppose listing metadata says:
+
+```text
+Amenities:
+✓ Pool
+✓ AC
+✓ TV
+✓ Washer
+✓ Balcony
+```
+
+You inspect the photos.
+
+The model asks:
+
+```text
+Does this photo show a pool?
+Does this photo show air conditioning?
+Does this photo show a TV?
+Does this photo show a washing machine?
+Does this photo show a balcony?
+```
+
+Then compare:
+
+```text
+Declared       Visually detected
+
+Pool      ✓        ✓
+AC        ✓        ✓
+TV        ✓        ✗
+Washer    ✓        ✓
+Balcony   ✓        ✓
+```
+
+---
+
+# 13. Important asymmetry
+
+Do **not** treat absence as strong evidence.
+
+If:
+
+```text
+Declared: TV
+Detected: no TV
+```
+
+you shouldn't say:
+
+> "This listing doesn't have a TV."
+
+The photo may simply not show it.
+
+Therefore:
+
+### Detected but not declared
+
+This is useful:
+
+```text
+Pool detected
+Pool not declared
+```
+
+→ positive suggestion.
+
+### Declared but not detected
+
+Only lower confidence mildly.
+
+This exact asymmetry is required by the specification. 
+
+---
+
+# 14. Module 5 — Text Quality
+
+This should be deliberately simple.
+
+You have:
+
+* Arabic
+* French
+* English
+
+The specification says **no heavy ML is necessary**. 
+
+You can calculate:
+
+### Language coverage
+
+Example:
+
+```text
+Arabic     ✓
+French     ✓
+English    ✗
+```
+
+### Description length
+
+For example:
+
+```text
+< 50 words        → low
+50–100            → medium
+100–300           → good
+> 300             → maybe excellent/plateau
+```
+
+The exact thresholds should be configurable.
+
+### Title quality
+
+Check things such as:
+
+* empty title
+* extremely short title
+* useful descriptive content
+
+### Description completeness
+
+Check whether useful information exists.
+
+---
+
+# 15. Module 6 — Listing Completeness
+
+This is metadata/content completeness.
+
+Potential signals:
+
+```text
+title exists
+description exists
+Arabic description
+French description
+English description
+amenities
+capacity
+rooms
+calendar depth
+price
+instant book
+iCal state
+```
+
+The specification explicitly mentions completeness relative to **vertical and capacity peers**, plus calendar depth and pricing. 
+
+So don't necessarily judge every listing against one universal threshold.
+
+For example:
+
+```text
+Apartment
+capacity = 8
+```
+
+should potentially have more relevant information than:
+
+```text
+Small studio
+capacity = 2
+```
+
+---
+
+# 16. The complete pipeline
+
+Now combine everything.
+
+```text
+                  LISTING
+                     │
+        ┌────────────┴─────────────┐
+        │                          │
+      Metadata                   Photos
+        │                          │
+        │             ┌────────────┼────────────┐
+        │             │            │            │
+        │             ▼            ▼            ▼
+        │         Technical     Aesthetic    Room type
+        │           quality      quality       detection
+        │             │            │            │
+        │             └────────────┼────────────┘
+        │                          │
+        │                     Amenity check
+        │                          │
+        ▼                          ▼
+    Text quality              Photo features
+        │                          │
+        └─────────────┬────────────┘
+                      ▼
+              Component scores
+                      │
+                      ▼
+               Weighted formula
+                      │
+                      ▼
+                0 – 100 score
+                      │
+                      ▼
+             Explainable breakdown
+                      │
+                      ▼
+                 Feature table
+```
+
+---
+
+# 17. The score should NOT be one giant function
+
+Don't write:
+
+```python
+def calculate_score(listing):
+    ...
+```
+
+with 500 lines.
+
+Instead:
+
+```text
+quality_engine/
+│
+├── ingestion/
+├── features/
+│   ├── image/
+│   │   ├── technical.py
+│   │   ├── aesthetic.py
+│   │   ├── room_coverage.py
+│   │   ├── amenities.py
+│   │   └── duplicates.py
+│   │
+│   ├── text/
+│   │   ├── language.py
+│   │   ├── length.py
+│   │   └── completeness.py
+│   │
+│   └── metadata/
+│       └── completeness.py
+│
+├── scoring/
+│   ├── components.py
+│   ├── weighted_score.py
+│   └── explanations.py
+│
+├── models/
+│   ├── clip/
+│   ├── aesthetic/
+│   └── room_classifier/
+│
+├── calibration/
+│
+├── evaluation/
+│
+├── config/
+│   └── weights.yaml
+│
+├── schemas/
+│
+├── pipeline/
+│
+├── tests/
+│
+├── scripts/
+│
+└── README.md
+```
+
+---
+
+# 18. Your main data contract
+
+You should define a schema early.
+
+Something conceptually like:
+
+```json
+{
+  "listing_id": "123",
+  "quality_score": 78.4,
+  "components": {
+    "photo_technical": 82,
+    "photo_aesthetic": 76,
+    "room_coverage": 70,
+    "amenity_check": 85,
+    "text_quality": 90,
+    "completeness": 74
+  },
+  "explanation": {
+    "positive": [
+      "Good photo resolution",
+      "Kitchen photo detected",
+      "Pool detected and declared"
+    ],
+    "issues": [
+      "2 blurry photos",
+      "No bathroom photo",
+      "Arabic description missing"
+    ]
+  },
+  "version": "quality-v1"
+}
+```
+
+The exact schema should be finalized from the project's contract, but this is the structure you should aim for.
+
+---
+
+# 19. The Feature Table
+
+This is **the most important interface** with the rest of the ranking system.
+
+One row per listing.
+
+Conceptually:
+
+| listing_id | quality_score | photo_technical | aesthetic | room_coverage | amenity_check | text | completeness |
+| ---------- | ------------: | --------------: | --------: | ------------: | ------------: | ---: | -----------: |
+| L001       |          82.4 |              90 |        84 |            75 |            80 |   92 |           78 |
+| L002       |          67.1 |              60 |        71 |            50 |            72 |   80 |           65 |
+| L003       |          91.2 |              95 |        92 |            90 |            89 |   94 |           87 |
+
+This table is the **contract** between the quality engine and ranking engine. Changes to it require agreement and a contract version bump. 
+
+---
+
+# 20. What happens to the feature table later?
+
+The ranking system consumes:
+
+```text
+quality_score
+```
+
+alongside behavioral signals.
+
+For example:
+
+```text
+Listing
+│
+├── quality_score
+├── booking performance
+├── reliability
+├── fit
+├── guest rating
+└── demand
+```
+
+So your quality engine is essentially producing one important signal for the larger ranking architecture.
+
+---
+
+# 21. Evaluation — don't just calculate scores
+
+This is a major part of the project.
+
+You need **three kinds of evaluation**.
+
+---
+
+## A. Room classification
+
+Target:
+
+```text
+Accuracy ≥ 85%
+```
+
+The specification explicitly sets this gate. 
+
+Report:
+
+```text
+Accuracy
+Precision
+Recall
+F1
+Confusion matrix
+```
+
+Even if only accuracy is required, the others help understand errors.
+
+---
+
+# 22. B. Blur detection
+
+Target:
+
+```text
+Precision ≥ 0.90
+```
+
+Why precision?
+
+Because:
+
+```text
+Actually sharp
+       ↓
+Model says blurry
+       ↓
+BAD
+```
+
+You're unfairly penalizing a host.
+
+The spec explicitly prioritizes precision ≥ 0.9 because falsely calling a photo blurry is worse than missing one. 
+
+---
+
+# 23. C. Human ranking sanity check
+
+Get:
+
+**30 listings**
+
+Two people independently rank them by overall photo quality.
+
+Then:
+
+```text
+Human ranking
+      VS
+Engine ranking
+```
+
+Calculate a rank correlation.
+
+This tells you:
+
+> Does the quality engine's ordering roughly correspond to human intuition?
+
+The specification explicitly asks for this test. 
+
+---
+
+# 24. Moroccan visual bias analysis
+
+This is actually one of the most valuable research parts.
+
+You need to ask:
+
+> Does the model work differently on Moroccan interiors?
+
+Examples:
+
+* riads
+* zellige
+* traditional Moroccan decoration
+* Moroccan architecture
+* unusual lighting
+* local furniture
+
+The concern is:
+
+```text
+Generic training data
+       ↓
+Western / generic interiors
+       ↓
+Moroccan listing
+       ↓
+Potential bias
+```
+
+So manually inspect errors.
+
+The final report must explicitly discuss this question. 
+
+---
+
+# 25. The most important experiments
+
+I would structure your experiments like this.
+
+### Experiment 1 — Technical image quality
+
+Compare:
+
+```text
+blur
+brightness
+exposure
+resolution
+```
+
+against human judgment.
+
+---
+
+### Experiment 2 — Aesthetic model
+
+Compare:
+
+```text
+raw pretrained score
+```
+
+against:
+
+```text
+human ratings
+```
+
+Then calibrate.
+
+---
+
+### Experiment 3 — Room classification
+
+Compare:
+
+```text
+zero-shot CLIP
+```
+
+against:
+
+```text
+labeled dataset
+```
+
+If:
+
+```text
+accuracy >= 85%
+```
+
+keep it.
+
+Otherwise:
+
+```text
+CLIP embeddings
+      ↓
+small classifier
+```
+
+---
+
+### Experiment 4 — Duplicate detection
+
+Test:
+
+```text
+pHash
+```
+
+against manually identified duplicates.
+
+Only move to embeddings if pHash isn't sufficient.
+
+---
+
+### Experiment 5 — Overall score
+
+Take:
+
+```text
+30 listings
+```
+
+Have humans rank them.
+
+Compare:
+
+```text
+human ranking
+      VS
+quality ranking
+```
+
+---
+
+# 26. Technologies
+
+A sensible stack is:
+
+### Programming
+
+**Python**
+
+because the quality engine is explicitly specified as Python. 
+
+### Computer vision
+
+```text
+OpenCV
+Pillow
+NumPy
+```
+
+### ML
+
+```text
+PyTorch
+Transformers
+CLIP-compatible vision-language model
+```
+
+### Data
+
+```text
+Pandas
+PyArrow / Parquet
+```
+
+### Evaluation
+
+```text
+scikit-learn
+SciPy
+```
+
+### Config
+
+```text
+YAML
+Pydantic
+```
+
+### Testing
+
+```text
+pytest
+```
+
+---
+
+# 27. No GPU requirement
+
+This is important when choosing models.
+
+The specification explicitly says:
+
+> no GPU requirement
+
+and:
+
+> pretrained models and zero-shot baselines first. 
+
+So don't start with:
+
+```text
+huge ViT
+fine-tuning
+LLM
+massive multimodal model
+```
+
+Start with:
+
+```text
+pretrained model
+       ↓
+inference
+       ↓
+cached embeddings
+```
+
+If necessary:
+
+```text
+embeddings
+    ↓
+small classifier
+```
+
+---
+
+# 28. Caching is important
+
+Don't repeatedly run CLIP over the same photos.
+
+Create:
+
+```text
+photo_id
+    ↓
+embedding
+```
+
+and save it.
+
+For example:
+
+```text
+artifacts/
+└── embeddings/
+    ├── photo_001.npy
+    ├── photo_002.npy
+    └── ...
+```
+
+Then experiments can reuse them.
+
+This also makes the small classifier extremely cheap to train.
+
+---
+
+# 29. Version everything
+
+Your output should have:
+
+```text
+quality_engine_version
+model_version
+config_version
+```
+
+For example:
+
+```text
+quality_engine = 1.0
+aesthetic_model = aesthetic-v1
+room_model = clip-zero-shot-v1
+config = quality-config-v1
+```
+
+Because otherwise:
+
+```text
+Score = 82
+```
+
+doesn't tell you **how** 82 was produced.
+
+---
+
+# 30. Configuration
+
+Have something like:
+
+```text
+config/
+│
+├── weights.yaml
+├── thresholds.yaml
+├── room_labels.yaml
+└── model_config.yaml
+```
+
+For example:
+
+```yaml
+room_labels:
+  - bedroom
+  - bathroom
+  - kitchen
+  - living
+  - exterior
+  - pool
+  - view
+  - other
+```
+
+And:
+
+```yaml
+thresholds:
+  room_accuracy_gate: 0.85
+  blur_precision_gate: 0.90
+```
+
+Weights must be configuration rather than hard-coded. 
+
+---
+
+# 31. Batch processing
+
+This isn't primarily an API.
+
+It should work like:
+
+```bash
+python -m quality_engine.run \
+    --input data/listings.parquet \
+    --photos data/photos/ \
+    --output output/features.parquet
+```
+
+Then:
+
+```text
+Input
+  ↓
+process 1,000 listings
+  ↓
+features.parquet
+```
+
+This matches the requirement that the quality score be computable as a batch job. 
+
+---
+
+# 32. Error handling
+
+You absolutely need this.
+
+Imagine:
+
+```text
+Listing has no photos
+```
+
+Don't crash.
+
+Return:
+
+```json
+{
+  "photo_score": 0,
+  "photo_status": "no_photos"
+}
+```
+
+Or whatever policy you define.
+
+Similarly:
+
+```text
+missing description
+invalid image
+corrupt image
+unknown language
+missing amenities
+```
+
+should be handled gracefully.
+
+---
+
+# 33. Logging
+
+For every listing, you should be able to understand:
+
+```text
+listing_id
+processing status
+number of photos
+failed photos
+component scores
+final score
+model versions
+config version
+```
+
+Example:
+
+```text
+INFO listing=L123 photos=12
+INFO technical_score=84.2
+INFO aesthetic_score=79.1
+INFO room_coverage=70.0
+INFO amenity_score=88.0
+INFO final_score=81.7
+```
+
+---
+
+# 34. Testing
+
+You need unit tests.
+
+### Technical image tests
+
+```text
+test_blurry_image_detected()
+test_sharp_image_not_marked_blurry()
+test_low_resolution_penalized()
+```
+
+### Room classification tests
+
+```text
+test_room_labels()
+test_confidence_threshold()
+```
+
+### Score tests
+
+```text
+test_score_range_0_100()
+test_weights_sum_to_100()
+test_score_monotonicity()
+```
+
+### Data tests
+
+```text
+test_missing_description()
+test_missing_photos()
+test_invalid_listing()
+```
+
+---
+
+# 35. Property tests
+
+The specification explicitly asks for these.
+
+You need to guarantee:
+
+### Weights sum to 100
+
+```text
+sum(weights) == 100
+```
+
+### Monotonicity
+
+If a listing becomes better in one component:
+
+```text
+component score ↑
+```
+
+the total quality score should not decrease.
+
+### Every rule/output is traceable
+
+For your engine:
+
+```text
+component → score → reason
+```
+
+should remain connected.
+
+The document explicitly lists weight-sum and monotonicity tests among the required properties. 
+
+---
+
+# 36. What your final result should look like
+
+Imagine this listing:
+
+```text
+Listing: Riad Marrakech
+```
+
+The engine outputs:
+
+```text
+QUALITY SCORE
+━━━━━━━━━━━━━━━━━━━━
+82.7 / 100
+```
+
+### Photo technical
+
+```text
+17.2 / 20
+
+✓ Good resolution
+✓ Good exposure
+✗ 2 blurry photos
+```
+
+### Aesthetic
+
+```text
+13.4 / 15
+
+✓ Good composition
+✓ Good lighting
+```
+
+### Room coverage
+
+```text
+7.5 / 10
+
+✓ Bedroom
+✓ Kitchen
+✓ Living room
+✓ Exterior
+✗ Bathroom
+```
+
+### Amenities
+
+```text
+8.8 / 10
+
+✓ Pool detected + declared
+✓ Balcony detected + declared
+✓ TV detected
+⚠ AC declared but not visually confirmed
+```
+
+### Text
+
+```text
+12.5 / 15
+
+✓ French
+✓ English
+✗ Arabic
+✓ Good description length
+```
+
+### Completeness
+
+```text
+8.3 / 10
+
+✓ Capacity
+✓ Price
+✓ Amenities
+✓ Calendar
+...
+```
+
+And finally:
+
+> **Improve your listing**
+>
+> 1. Add a clear bathroom photo.
+> 2. Replace the two blurry photos.
+> 3. Add an Arabic description.
+> 4. Consider declaring the visually detected balcony.
+
+That is exactly the direction the project is designed to enable. The host-facing “improve your listing” report is also identified as a stretch goal. 
+
+---
+
+# 37. What you should NOT build
+
+To avoid wasting time:
+
+### ❌ Don't build a complete ranking engine
+
+That's another component.
+
+### ❌ Don't use booking data
+
+Quality must work during cold start.
+
+### ❌ Don't train a giant vision model
+
+Start pretrained.
+
+### ❌ Don't build cloud infrastructure
+
+Laptop-only is part of the constraint.
+
+### ❌ Don't hard-code weights
+
+Use config.
+
+### ❌ Don't return only a number
+
+The breakdown is essential.
+
+### ❌ Don't overcomplicate text
+
+The specification explicitly says no heavy ML is needed.
+
+### ❌ Don't automatically punish an undeclared visual amenity heavily
+
+Absence of visual evidence is weak evidence.
+
+---
+
+# 38. Recommended development order
+
+This is how **I would actually build it**.
+
+## Phase 1 — Understand the data
+
+```text
+Day 1
+│
+├── inspect listings
+├── inspect photos
+├── inspect columns
+├── count missing values
+├── inspect languages
+├── inspect cities
+└── inspect amenities
+```
+
+Deliverable:
+
+```text
+data_profile.md
+```
+
+---
+
+## Phase 2 — Define contract
+
+Before ML:
+
+```text
+listing schema
+      ↓
+feature schema
+      ↓
+quality output schema
+```
+
+Create:
+
+```text
+CONTRACT.md
+```
+
+This should be done early because the feature table is the shared interface. 
+
+---
+
+# 39. Phase 3 — Build technical image scoring
+
+Start here because it is simple.
+
+Implement:
+
+```text
+blur
+brightness
+exposure
+resolution
+duplicate detection
+```
+
+No ML yet.
+
+---
+
+# 40. Phase 4 — Text/completeness
+
+Implement:
+
+```text
+language detection
+description length
+title checks
+amenity completeness
+calendar depth
+pricing
+```
+
+Again:
+
+**simple first.**
+
+---
+
+# 41. Phase 5 — Room classification
+
+Then introduce CLIP / pretrained vision model.
+
+First:
+
+```text
+zero-shot
+```
+
+Evaluate.
+
+If:
+
+```text
+accuracy >= 85%
+```
+
+→ keep.
+
+Otherwise:
+
+```text
+embeddings → small classifier
+```
+
+---
+
+# 42. Phase 6 — Amenity detection
+
+Reuse the same vision infrastructure.
+
+Don't create a completely separate image system.
+
+Conceptually:
+
+```text
+Photo
+  │
+  ▼
+Vision model
+  │
+  ├── room classification
+  └── amenity detection
+```
+
+---
+
+# 43. Phase 7 — Aesthetic model
+
+Then integrate:
+
+```text
+pretrained aesthetic predictor
+```
+
+and calibrate using the ~200 human-rated photos.
+
+---
+
+# 44. Phase 8 — Score aggregation
+
+Now combine everything:
+
+```text
+                 Features
+                    │
+                    ▼
+           component normalization
+                    │
+                    ▼
+              configured weights
+                    │
+                    ▼
+                0–100 score
+```
+
+---
+
+# 45. Phase 9 — Explainability
+
+This should be treated as a real product feature.
+
+Don't generate explanations after the fact.
+
+Your scoring functions should return something like:
+
+```python
+{
+    "score": 82,
+    "reasons": [
+        "2 blurry photos",
+        "bathroom not covered",
+        "pool detected",
+        "Arabic description missing"
+    ]
+}
+```
+
+So explainability is built into the architecture.
+
+---
+
+# 46. Phase 10 — Evaluation
+
+Run:
+
+```text
+room accuracy
+blur precision
+human ranking correlation
+Moroccan-interior error analysis
+```
+
+Then produce graphs/tables.
+
+---
+
+# 47. Phase 11 — Feature table
+
+Generate the final dataset:
+
+```text
+features.parquet
+```
+
+with:
+
+```text
+listing_id
+quality_score
+component scores
+version
+```
+
+---
+
+# 48. Phase 12 — README + reproducibility
+
+Someone who has never seen your repo should be able to do:
+
+```bash
+git clone ...
+pip install ...
+python ...
+```
+
+and reproduce the result.
+
+This is explicitly a success criterion: the evaluation harness and replay tooling must be runnable from the README by someone unfamiliar with the repo. 
+
+---
+
+# 49. Your final repository
+
+I recommend ending with approximately:
+
+```text
+quality-score-engine/
+│
+├── README.md
+├── CONTRACT.md
+├── pyproject.toml
+├── .gitignore
+│
+├── config/
+│   ├── weights.yaml
+│   ├── thresholds.yaml
+│   └── models.yaml
+│
+├── data/
+│   └── README.md
+│
+├── src/
+│   └── quality_engine/
+│       ├── ingestion/
+│       ├── schemas/
+│       ├── features/
+│       │   ├── image/
+│       │   ├── text/
+│       │   └── metadata/
+│       ├── models/
+│       ├── scoring/
+│       ├── calibration/
+│       ├── evaluation/
+│       └── pipeline/
+│
+├── scripts/
+│   ├── profile_data.py
+│   ├── extract_features.py
+│   ├── run_quality.py
+│   └── evaluate.py
+│
+├── tests/
+│
+├── notebooks/
+│   ├── data_exploration.ipynb
+│   ├── aesthetic_calibration.ipynb
+│   └── room_classification.ipynb
+│
+└── artifacts/
+    ├── embeddings/
+    ├── models/
+    └── reports/
+```
+
+---
+
+# 50. Final deliverables
+
+By the end, you should have:
+
+### 1. Working quality engine
+
+```text
+Input listing
+      ↓
+0–100 quality score
+```
+
+### 2. Component breakdown
+
+```text
+technical
+aesthetic
+room coverage
+amenities
+text
+completeness
+```
+
+### 3. Feature table
+
+```text
+one row / listing
+```
+
+### 4. Room classifier
+
+```text
+≥85% accuracy
+```
+
+### 5. Blur detector
+
+```text
+≥90% precision
+```
+
+### 6. Aesthetic calibration
+
+```text
+~200 human-rated photos
+```
+
+### 7. Human ranking sanity check
+
+```text
+30 listings
+×
+2 raters
+```
+
+### 8. Error analysis
+
+Especially Moroccan interiors.
+
+### 9. Tests
+
+Including:
+
+```text
+weights = 100
+monotonicity
+score bounds
+```
+
+### 10. Documentation
+
+```text
+README
+CONTRACT
+technical architecture
+evaluation report
+```
+
+---
+
+# 51. The simplest mental model
+
+If everything above feels like a lot, remember **these 6 boxes**:
+
+```text
+             LISTING + PHOTOS
+                    │
+                    ▼
+        ┌───────────────────────┐
+        │ 1. PHOTO TECHNICAL    │
+        │ blur / exposure / res │
+        └───────────┬───────────┘
+                    │
+        ┌───────────▼───────────┐
+        │ 2. PHOTO ML           │
+        │ aesthetic / rooms     │
+        │ amenities / duplicates│
+        └───────────┬───────────┘
+                    │
+        ┌───────────▼───────────┐
+        │ 3. CONTENT            │
+        │ text / language       │
+        └───────────┬───────────┘
+                    │
+        ┌───────────▼───────────┐
+        │ 4. COMPLETENESS       │
+        │ metadata / calendar   │
+        │ amenities / price     │
+        └───────────┬───────────┘
+                    │
+        ┌───────────▼───────────┐
+        │ 5. WEIGHTED SCORE     │
+        │       0 → 100         │
+        └───────────┬───────────┘
+                    │
+        ┌───────────▼───────────┐
+        │ 6. EXPLANATION        │
+        │ score + reasons       │
+        └───────────────────────┘
+```
+
+**That's the entire system.**
+
+And the key design philosophy is:
+
+> **Use simple, explainable methods wherever possible; use pretrained computer vision where it creates real value; evaluate every ML component against human-labeled data; and make the final score configurable, reproducible, and explainable.**
+
+The provided specification explicitly frames this as a **content-only cold-start quality signal**, with photo signals carrying 40/100 points and the output feeding a versioned feature table. 
+
+If you're starting implementation now, **the very first thing I would do is NOT install CLIP or train anything**. Start by profiling the provided data and defining the exact feature-table contract, then build the technical image features first.

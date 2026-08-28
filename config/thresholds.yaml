@@ -1,0 +1,43 @@
+# Evaluation gates
+room_accuracy_gate: 0.85
+blur_precision_gate: 0.90
+
+# Blur detection (Laplacian variance)
+blur:
+  sharp_threshold: 100.0
+  blurry_threshold: 50.0
+
+# Exposure / brightness
+exposure:
+  dark_threshold: 60
+  bright_threshold: 200
+
+# Resolution (megapixels)
+resolution:
+  min_megapixels: 0.3
+  good_megapixels: 2.0
+
+# Duplicate detection (perceptual hash Hamming distance)
+duplicates:
+  hash_threshold: 5
+
+# Text quality
+text:
+  min_description_words: 50
+  good_description_words: 100
+  excellent_description_words: 300
+  min_title_length: 10
+
+# Room classification
+room:
+  confidence_threshold: 0.25
+
+# Amenity visual detection
+amenity:
+  detection_threshold: 0.22
+  declared_not_detected_penalty: 0.3
+
+# Completeness
+completeness:
+  min_calendar_depth_days: 30
+  good_calendar_depth_days: 90

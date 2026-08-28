@@ -1,0 +1,45 @@
+room_labels:
+  - bedroom
+  - bathroom
+  - kitchen
+  - living
+  - exterior
+  - pool
+  - view
+  - other
+
+amenity_labels:
+  - pool
+  - air_conditioning
+  - tv
+  - washing_machine
+  - balcony
+  - wifi
+  - parking
+  - kitchen
+  - heating
+  - hot_tub
+
+# Zero-shot prompts for room classification
+room_prompts:
+  bedroom: "a photo of a bedroom in a vacation rental"
+  bathroom: "a photo of a bathroom in a vacation rental"
+  kitchen: "a photo of a kitchen in a vacation rental"
+  living: "a photo of a living room in a vacation rental"
+  exterior: "a photo of the exterior of a building or house"
+  pool: "a photo of a swimming pool"
+  view: "a photo of a scenic view from a window or balcony"
+  other: "a photo of an interior or exterior space"
+
+# Zero-shot prompts for amenity detection
+amenity_prompts:
+  pool: "a swimming pool"
+  air_conditioning: "an air conditioning unit"
+  tv: "a television screen"
+  washing_machine: "a washing machine"
+  balcony: "a balcony or terrace"
+  wifi: "a wifi router"
+  parking: "a parking space or garage"
+  kitchen: "a fully equipped kitchen"
+  heating: "a radiator or heating system"
+  hot_tub: "a hot tub or jacuzzi"

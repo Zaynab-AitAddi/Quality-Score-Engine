@@ -1,0 +1,11 @@
+# Component weights (must sum to 100)
+weights:
+  photo_technical: 20
+  photo_aesthetic: 15
+  room_coverage: 10
+  amenity_check: 10
+  text_quality: 15
+  completeness: 30
+
+# Version tag for this config
+config_version: quality-config-v1

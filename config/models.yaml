@@ -1,0 +1,16 @@
+quality_engine_version: "1.0.0"
+config_version: "quality-config-v1"
+
+clip:
+  model_name: "ViT-B-32"
+  pretrained: "openai"
+  device: "cpu"
+
+aesthetic:
+  model_version: "aesthetic-v1"
+  # Simple heuristic fallback until calibration dataset is ready
+  use_pretrained: true
+
+room_classifier:
+  model_version: "clip-zero-shot-v1"
+  fallback_classifier: "embedding-svm-v1"
