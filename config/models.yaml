@@ -4,6 +4,7 @@ config_version: "quality-config-v1"
 clip:
   model_name: "ViT-B-32"
   pretrained: "openai"
+  quick_gelu: true
   device: "cpu"
 
 aesthetic:

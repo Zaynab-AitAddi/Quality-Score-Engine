@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+
+import numpy as np
 import yaml
 from sklearn.linear_model import LinearRegression
-import numpy as np
 
 
 @dataclass
@@ -44,5 +45,5 @@ def load_calibrator(path: Path) -> LinearCalibrator | None:
         with path.open("r", encoding="utf-8") as fh:
             data = yaml.safe_load(fh)
         return LinearCalibrator(slope=float(data.get("slope", 1.0)), intercept=float(data.get("intercept", 0.0)))
-    except Exception:
+    except (OSError, yaml.YAMLError, AttributeError, TypeError, ValueError):
         return None

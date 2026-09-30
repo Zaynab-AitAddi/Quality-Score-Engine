@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-from quality_engine.config import load_weights, load_models_config
+from quality_engine.config import (
+    load_models_config,
+    load_weights,
+    validate_weights_sum_to_100,
+)
 from quality_engine.schemas.output import ComponentScores, Explanation, QualityResult
 
 
 def compute_weighted_score(components: ComponentScores) -> float:
     weights = load_weights()["weights"]
+    validate_weights_sum_to_100(weights)
     total = (
         components.photo_technical * weights["photo_technical"]
         + components.photo_aesthetic * weights["photo_aesthetic"]
@@ -30,16 +35,27 @@ def build_explanation(
     undeclared_amenities: list[str],
     missing_rooms: list[str],
     blurry_count: int,
+    bad_photos: list[dict[str, str | int | None]] | None = None,
 ) -> Explanation:
     positive: list[str] = []
     issues: list[str] = []
     suggestions: list[str] = []
+    bad_photos = bad_photos or []
 
     for reason in technical_reasons + aesthetic_reasons + room_reasons + amenity_reasons:
         lower = reason.lower()
         if any(tok in lower for tok in ("good", "detected and declared", "coverage")):
             positive.append(reason)
-        elif any(tok in lower for tok in ("blurry", "duplicate", "low-resolution", "missing", "no ")):
+        elif any(tok in lower for tok in (
+            "blurry",
+            "duplicate",
+            "low-resolution",
+            "missing",
+            "no ",
+            "not visually confirmed",
+            "detected but not declared",
+            "unavailable",
+        )):
             issues.append(reason)
 
     for reason in text_reasons:
@@ -57,12 +73,26 @@ def build_explanation(
     for room in missing_rooms:
         suggestions.append(f"Add a clear {room} photo")
     for amenity in undeclared_amenities:
-        suggestions.append(f"Consider declaring the visually detected {amenity.replace('_', ' ')}")
+        suggestions.append(
+            f"Consider declaring the visually detected {amenity.replace('_', ' ')}")
 
     if any("arabic" in i.lower() for i in issues):
         suggestions.append("Add an Arabic description")
 
-    return Explanation(positive=positive[:10], issues=issues[:10], suggestions=suggestions[:8])
+    return Explanation(
+        positive=positive[:10],
+        issues=issues[:10],
+        suggestions=suggestions[:8],
+        bad_photos=[
+            {
+                "path": str(item.get("path", "")),
+                "reason": str(item.get("reason", "unknown")),
+                "width": item.get("width"),
+                "height": item.get("height"),
+            }
+            for item in bad_photos
+        ],
+    )
 
 
 def assemble_result(

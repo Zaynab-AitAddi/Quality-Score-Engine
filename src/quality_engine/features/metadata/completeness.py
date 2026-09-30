@@ -41,8 +41,8 @@ def score_completeness(listing: ListingRecord) -> CompletenessResult:
     missing = [k for k, ok in checks.items() if not ok]
     score = (len(filled) / len(checks)) * 100
 
-    reasons = [f"{field} present" for field in filled[:5]]
-    for field in missing:
-        reasons.append(f"Missing or weak: {field.replace('_', ' ')}")
+    reasons = [f"{field_name} present" for field_name in filled[:5]]
+    for field_name in missing:
+        reasons.append(f"Missing or weak: {field_name.replace('_', ' ')}")
 
     return CompletenessResult(score=float(score), filled_fields=filled, missing_fields=missing, reasons=reasons)

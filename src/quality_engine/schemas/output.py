@@ -14,10 +14,18 @@ class ComponentScores(BaseModel):
     completeness: float = 0.0
 
 
+class BadPhotoIssue(BaseModel):
+    path: str
+    reason: str
+    width: int | None = None
+    height: int | None = None
+
+
 class Explanation(BaseModel):
     positive: list[str] = Field(default_factory=list)
     issues: list[str] = Field(default_factory=list)
     suggestions: list[str] = Field(default_factory=list)
+    bad_photos: list[BadPhotoIssue] = Field(default_factory=list)
 
 
 class QualityResult(BaseModel):

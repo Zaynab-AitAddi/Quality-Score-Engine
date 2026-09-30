@@ -9,6 +9,7 @@ photos/adv_0001/photo1.jpg,bedroom
 from __future__ import annotations
 
 from pathlib import Path
+
 import pandas as pd
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 

@@ -18,8 +18,8 @@ class TextQualityResult:
 
 
 ARABIC_RE = re.compile(r"[\u0600-\u06FF]")
-FRENCH_HINTS = re.compile(r"\b(le|la|les|des|une|un|et|dans|pour|avec|chambre|appartement)\b", re.I)
-ENGLISH_HINTS = re.compile(r"\b(the|and|with|room|bedroom|apartment|kitchen|pool|wifi)\b", re.I)
+FRENCH_HINTS = re.compile(r"\b(le|la|les|des|une|un|et|dans|pour|avec|chambre|appartement)\b", re.IGNORECASE)
+ENGLISH_HINTS = re.compile(r"\b(the|and|with|room|bedroom|apartment|kitchen|pool|wifi)\b", re.IGNORECASE)
 
 
 def detect_languages(text: str) -> dict[str, bool]:

@@ -1,7 +1,8 @@
-"""Zero-shot room type classification via CLIP (with CPU fallback)."""
+"""Classify listing photos by room and score coverage, using CLIP with filename-based fallbacks."""
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -11,7 +12,8 @@ from PIL import Image
 
 from quality_engine.config import load_room_labels, load_thresholds
 
-EXPECTED_ROOMS = ["bedroom", "bathroom", "kitchen", "living", "exterior", "pool", "view"]
+EXPECTED_ROOMS = ["bedroom", "bathroom", "kitchen",
+                  "living", "exterior", "pool", "view"]
 
 
 @dataclass
@@ -32,21 +34,27 @@ class RoomCoverageResult:
 
 @lru_cache
 def _get_clip_model():
+    if os.getenv("QUALITY_ENGINE_USE_CLIP", "1").lower() not in {"1", "true", "yes", "on"}:
+        return None
+
     try:
         import open_clip
         import torch
 
         cfg = load_room_labels()
-        model_cfg = __import__("quality_engine.config", fromlist=["load_models_config"]).load_models_config()
+        model_cfg = __import__("quality_engine.config", fromlist=[
+                               "load_models_config"]).load_models_config()
         clip_cfg = model_cfg.get("clip", {})
         model, _, preprocess = open_clip.create_model_and_transforms(
             clip_cfg.get("model_name", "ViT-B-32"),
             pretrained=clip_cfg.get("pretrained", "openai"),
+            force_quick_gelu=clip_cfg.get("quick_gelu", True),
         )
         device = clip_cfg.get("device", "cpu")
         model = model.to(device)
         model.eval()
-        tokenizer = open_clip.get_tokenizer(clip_cfg.get("model_name", "ViT-B-32"))
+        tokenizer = open_clip.get_tokenizer(
+            clip_cfg.get("model_name", "ViT-B-32"))
 
         labels = cfg["room_labels"]
         prompts = [cfg["room_prompts"][label] for label in labels]
@@ -67,11 +75,13 @@ def _classify_with_clip(path: Path) -> RoomPrediction | None:
         return None
     model, preprocess, text_features, labels, device, torch = bundle
     try:
-        image = preprocess(Image.open(path).convert("RGB")).unsqueeze(0).to(device)
+        image = preprocess(Image.open(path).convert("RGB")
+                           ).unsqueeze(0).to(device)
         with torch.no_grad():
             image_features = model.encode_image(image)
             image_features /= image_features.norm(dim=-1, keepdim=True)
-            probs = (100.0 * image_features @ text_features.T).softmax(dim=-1).cpu().numpy()[0]
+            probs = (100.0 * image_features @
+                     text_features.T).softmax(dim=-1).cpu().numpy()[0]
         idx = int(np.argmax(probs))
         return RoomPrediction(path=path, label=labels[idx], confidence=float(probs[idx]))
     except Exception:  # noqa: BLE001
@@ -80,7 +90,12 @@ def _classify_with_clip(path: Path) -> RoomPrediction | None:
 
 def _classify_fallback(path: Path) -> RoomPrediction:
     """Filename/path heuristic when CLIP is unavailable."""
-    name = path.name.lower()
+    name = path.name.lower().replace("_", " ").replace("-", " ")
+    space_name = " " + name + " "
+    for room in ["bedroom", "bathroom", "kitchen", "living room", "living", "exterior", "pool", "view"]:
+        if room in space_name:
+            label = "living" if room == "living room" else room
+            return RoomPrediction(path=path, label=label, confidence=0.5)
     if "cover" in name or "exterior" in name:
         return RoomPrediction(path=path, label="exterior", confidence=0.4)
     return RoomPrediction(path=path, label="other", confidence=0.2)
@@ -107,11 +122,13 @@ def score_room_coverage(photo_paths: list[Path], bedrooms: int = 1) -> RoomCover
     predictions: list[RoomPrediction] = []
     for path in photo_paths:
         if path.exists():
-            pred = classify_photo(path)
-            if pred.confidence >= conf_threshold or pred.label != "other":
-                predictions.append(pred)
+            predictions.append(classify_photo(path))
 
-    covered_set = {p.label for p in predictions if p.label in EXPECTED_ROOMS}
+    covered_set = {
+        prediction.label
+        for prediction in predictions
+        if prediction.confidence >= conf_threshold and prediction.label in EXPECTED_ROOMS
+    }
     missing = [room for room in EXPECTED_ROOMS if room not in covered_set]
 
     # Bathroom is critical; bedroom expected for multi-bedroom listings
