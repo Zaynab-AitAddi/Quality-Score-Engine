@@ -2,45 +2,41 @@
 
 **Prepared by Zaynab AITADDI**
 
-**Trevo internship project · Project A: Quality Score Engine**
+**Trevo internship project · Project A**
 
-This repository contains the Python batch-scoring part of the Trevo Ranking Lab internship brief. It produces a content-only quality score for vacation-rental listings during the booking cold-start period. Each result includes a 0–100 score, component scores, and an explanation intended to help identify listing improvements.
+A Python batch application that scores vacation-rental listing content for cold-start ranking, when booking history is sparse or unavailable. It analyzes listing text, metadata, and photos, then produces a weighted score from 0 to 100 with component scores and plain-language explanations.
 
-This is a standalone prototype using the supplied anonymized data package. It does not connect to Trevo production systems. It implements **Project A only**; the separate TypeScript ranking library, synthetic event generator, golden-query harness, replay tool, and demo UI described as Project B are not in this repository.
+This repository is the standalone **Project A quality engine**. It reads the supplied local data package and does not connect to Trevo production services.
 
-## Project Status Against the Brief
+## At a Glance
 
-| Brief deliverable                                                                     | Current repository status                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Python batch scorer and explainable feature table                                     | Implemented. Run from the repository root; see [CONTRACT.md](CONTRACT.md).                                                                                                                                                                                                                                                                                                                                                                                            |
-| Technical photo checks: blur, exposure, resolution, near-duplicates                   | Implemented with OpenCV and perceptual hashing. The configured gates still need labeled evaluation evidence.                                                                                                                                                                                                                                                                                                                                                          |
-| Room coverage using zero-shot vision                                                  | OpenCLIP zero-shot classification is implemented and runs on CPU. The current fallback is filename-based, not the proposed classifier trained on cached embeddings.                                                                                                                                                                                                                                                                                                   |
-| Amenity visual cross-check                                                            | OpenCLIP support is implemented. Set `QUALITY_ENGINE_USE_CLIP=1` to enable both room and amenity vision. Without it, amenity scoring is neutral.                                                                                                                                                                                                                                                                                                                      |
-| Aesthetic predictor calibrated on about 200 photos, independently rated by two people | **Not complete.** The current aesthetic score is a colorfulness/contrast/sharpness heuristic. A linear calibration utility exists, but ratings, calibration results, and held-out evaluation evidence are not included.                                                                                                                                                                                                                                               |
-| Room accuracy at least 85%; blur precision at least 90%                               | Evaluation utilities exist, but no labeled evaluation sets or results are included. The code reports metrics; passing these targets has not been demonstrated.                                                                                                                                                                                                                                                                                                        |
-| Human ranking comparison on 30 listings rated by two people                           | **Not implemented/evidenced.**                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| Error analysis for Moroccan interiors                                                 | **Not implemented/evidenced.**                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| Quality signal contributes 40 points as described in the brief                        | **Configuration discrepancy to resolve:** current weights assign 20 technical + 15 aesthetic + 10 room coverage + 10 amenity check = **55 points** to photo/image-related components. The brief says photo signals carry 40 points. This README does not change weights because the brief excerpt does not specify an unambiguous revised allocation. Confirm the intended component weights with the project supervisor before treating the current config as final. |
+- **Input:** listing and photo CSVs plus local photo files.
+- **Processing:** image-quality checks, room classification, optional amenity vision, text signals, and listing completeness.
+- **Output:** one explainable feature row per eligible listing, written as Parquet.
+- **Runtime:** Python 3.10+, CPU supported, no GPU required.
+- **Interface:** the versioned feature-table contract in [CONTRACT.md](CONTRACT.md).
 
-The current component weights are in [config/weights.yaml](config/weights.yaml); they sum to 100. The engine validates that total and the feature-table validator checks generated output. Do not describe this prototype as having met the internship evaluation targets until the labeled sets have been run and the results recorded.
-
-## What the Scorer Produces
-
-For each eligible listing, the engine writes one row to a Parquet feature table containing:
-
-- The overall `quality_score` from 0 to 100.
-- Six component scores: photo technical, photo aesthetic, room coverage, amenity check, text quality, and completeness.
-- Photo status, schema/configuration versions, and a JSON explanation with strengths, issues, suggestions, and flagged photos.
-
-Listings whose `vertical` is blank or `stay` are scored. The score is a weighted content signal; it does not use bookings, impressions, or host behavior.
+```mermaid
+flowchart LR
+    A[Listings CSV] --> B[Input loading]
+    C[Photos CSV and images] --> B
+    B --> D[Photo technical and aesthetic features]
+    B --> E[Room coverage and amenity checks]
+    B --> F[Text and completeness features]
+    D --> G[Weighted score and explanation]
+    E --> G
+    F --> G
+    G --> H[Console report]
+    G --> I[Parquet feature table]
+```
 
 ## Run on Windows
 
-Open PowerShell in the repository root, the folder containing `pyproject.toml` and `README.md`.
+Open PowerShell in the repository root, the directory containing `pyproject.toml`.
 
 ### Install
 
-Python 3.10 or newer is required. From the repository root:
+Python 3.10 or newer is required:
 
 ```powershell
 python --version
@@ -49,51 +45,60 @@ python -m venv .venv
 & .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
 ```
 
-The dependency set includes PyTorch and OpenCLIP and may take time and disk space to install. It is configured for CPU use; a GPU is not required.
+The project uses PyTorch and OpenCLIP, so installation can take time and disk space. A GPU is not required.
 
-### Check data
+### Check the data
 
-The scorer expects these inputs under `data/`:
+The scorer expects these paths:
 
-- `data/listings.csv` with at least a `listing_id` column.
-- `data/photos.csv` with `entity_id` and `file` columns.
-- Photo files at paths referenced by `photos.csv`, normally under `data/photos/`.
+```text
+data/
+  listings.csv
+  photos.csv
+  photos/...
+```
 
-The data package and photos are private project data and are not tracked by Git. If Trevo provided `ranking-data.zip` in the repository root, extract it locally:
+`listings.csv` must have a `listing_id` column. `photos.csv` must have `entity_id` and `file` columns. Photo file paths are resolved relative to `data/`. The provided data package and photos are private project data and are not tracked by Git. If Trevo supplied `ranking-data.zip` in the repository root, extract it locally:
 
 ```powershell
 Expand-Archive -LiteralPath .\ranking-data.zip -DestinationPath .\data -Force
 ```
 
-Check that the CSV files are directly inside `data/`. If the archive has a different layout, arrange the files to match the paths above. See [data/README.md](data/README.md).
+Make sure the CSVs end up directly in `data/`. More details are in [data/README.md](data/README.md).
 
 ### Score five listings
 
-For the full Project A visual baseline, enable OpenCLIP for room and amenity inference:
+For room and amenity vision, enable OpenCLIP:
 
 ```powershell
 $env:QUALITY_ENGINE_USE_CLIP = "1"
 python -m quality_engine.run --limit 5 --output .\output\sample.parquet
 ```
 
-The command prints a ranked report and writes `output/sample.parquet`. OpenCLIP downloads pretrained weights the first time they are needed; later runs use its local cache. The Hugging Face unauthenticated-request warning concerns download rate limits, not listing data. The scorer runs inference locally and does not send listing photos to the model hub.
+The command prints a ranked report and saves `output/sample.parquet`. The first OpenCLIP run may download pretrained weights; later runs use the local cache. Inference runs locally. A Hugging Face unauthenticated-request warning is about download rate limits, not listing data.
 
-To score the entire input dataset, omit `--limit`:
+To score all eligible listings, omit `--limit`:
 
 ```powershell
 python -m quality_engine.run --output .\output\features.parquet
 ```
 
-The default output path is `output/features.parquet`. Parent directories are created automatically. For offline or lightweight room fallback testing, disable CLIP:
+The default output is `output/features.parquet`. To see all options:
+
+```powershell
+python -m quality_engine.run --help
+```
+
+For offline fallback testing, disable CLIP:
 
 ```powershell
 $env:QUALITY_ENGINE_USE_CLIP = "0"
-python -m quality_engine.run --limit 5 --output .\output\sample-fallback.parquet
+python -m quality_engine.run --limit 5 --output .\output\fallback.parquet
 ```
 
-The fallback identifies room types from photo filenames; it is not equivalent to visual classification. With CLIP disabled, amenity scoring uses a neutral score. To see all CLI options, run `python -m quality_engine.run --help`.
+With CLIP disabled, room labels fall back to filename hints and amenity vision uses a neutral score. This fallback is not equivalent to visual classification.
 
-### Validate output and run tests
+### Run checks
 
 ```powershell
 python scripts\validate_feature_table.py .\output\features.parquet
@@ -101,85 +106,118 @@ python -m pytest -q
 python -m ruff check src tests scripts
 ```
 
-The validator checks required columns, unique/non-empty listing IDs, score ranges and finiteness, explanation JSON, and the configured weight total. The repository test suite checks code behavior; it does not replace labeled model evaluation.
+## How Scoring Works
 
-## Components and Configuration
+Each component is scored on a 0–100 scale. The configured component weights are applied to calculate the final score; weights are stored in [config/weights.yaml](config/weights.yaml), not embedded in the scoring formula.
 
-Current configuration lives in `config/` and is loaded from YAML.
+| Component       | Weight | Signal                                                                                                     |
+| --------------- | -----: | ---------------------------------------------------------------------------------------------------------- |
+| Photo technical |    20% | Blur/sharpness, exposure, resolution, and near-duplicate photos. OpenCV and perceptual hashing.            |
+| Photo aesthetic |    15% | Current heuristic uses colorfulness, contrast, and sharpness; optional linear calibration can be applied.  |
+| Room coverage   |    10% | OpenCLIP zero-shot room classification when enabled; filename fallback otherwise.                          |
+| Amenity check   |    10% | OpenCLIP visual detections compared with declared amenities; neutral when visual detection is unavailable. |
+| Text quality    |    15% | Heuristic language markers, title length, and description length.                                          |
+| Completeness    |    30% | Listing fields, amenity count relative to capacity, price, and calendar/availability fields.               |
 
-| Component       | Current weight | Current method                                                                                                                                |
-| --------------- | -------------: | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| Photo technical |            20% | OpenCV blur, exposure, resolution and image metrics; perceptual hashes for near-duplicates.                                                   |
-| Photo aesthetic |            15% | Heuristic based on colorfulness, contrast, and sharpness; optional linear calibration file. This is not a pretrained aesthetic predictor yet. |
-| Room coverage   |            10% | OpenCLIP zero-shot room classification when enabled; filename fallback if unavailable.                                                        |
-| Amenity check   |            10% | OpenCLIP visual comparison when enabled; neutral score when visual detection is disabled/unavailable.                                         |
-| Text quality    |            15% | Heuristic language-marker checks, title length, and description length bands. Language detection is not a full language-identification model. |
-| Completeness    |            30% | Listing fields, amenities relative to capacity, pricing, and calendar/availability fields.                                                    |
+Thresholds are in `config/thresholds.yaml`; model settings are in `config/models.yaml`; room and amenity labels/prompts are in `config/room_labels.yaml`.
 
-Weights must sum to 100. Thresholds are in `config/thresholds.yaml`, room and amenity prompts in `config/room_labels.yaml`, and model settings in `config/models.yaml`. Changing weight values or output semantics should be reviewed against the brief and versioned according to [CONTRACT.md](CONTRACT.md).
+### Image processing performance
 
-## Understanding the Console Report
+Independent photo analysis uses four worker threads by default, while OpenCV itself defaults to one thread to avoid CPU oversubscription. These controls do not change the scoring formulas. To tune them for a different computer, set positive integer values before running:
 
-- `SCORE` is the weighted overall result. `LEVEL` groups it as `EXCELLENT` (80+), `GOOD` (65–79.9), `NEEDS WORK` (50–64.9), or `LOW` (below 50). Rows are sorted from highest score to lowest.
-- Component abbreviations are `TECH`, `AESTH`, `ROOMS`, `AMEN`, `TEXT`, and `COMPLETE`. Each component is a score from 0 to 100 before weighting.
-- A photo flag gives the technical issue, then a room guess and classifier confidence, then pixel dimensions and megapixels. For example, `Below configured resolution target; room guess: living room (46% classifier confidence); 1440 x 648 px (0.93 MP)` means the image is below the configured resolution threshold; “living room” is the classifier's top room category. The percentage expresses classifier confidence, not image quality and not a calibrated probability of correctness.
-- `unknown room` means a recognized room label did not meet the configured confidence threshold; when possible, the top guess is shown in parentheses. A blur flag is a separate technical signal.
-- Current resolution thresholds are 0.3 MP minimum and 2 MP for the configured good target. The current report flags scores below 40 on its normalized resolution scale; this is a tunable project rule, not a universal definition of unusable image quality.
-- A neutral amenity score means visual amenity detection was not available, not that the listing's declared amenities were confirmed or disproved.
+```powershell
+$env:QUALITY_ENGINE_IMAGE_WORKERS = "6"
+$env:QUALITY_ENGINE_OPENCV_THREADS = "1"
+```
 
-## Evaluation Workflow
+The first model-enabled run can take longer due to weight download and initialization.
 
-Evaluation requires locally prepared, labeled CSVs. Keep labels and photos private and do not send Trevo data to public repositories, public model hubs, or third-party labeling services. Follow the internship's data-handling rules and have ratings produced within the approved private workflow.
+## Inputs
 
-Room labels CSV format:
+The loader recognizes these listing fields when present: `listing_id`, `vertical`, `name`, `description`, `city`, `country`, `capacity`, `bedrooms`, `bathrooms`, `base_price`, `currency`, `instant_booking`, `is_calendar_synced`, `has_active_ical`, `pricing_days_180`, `blocked_days_180`, `amenities`, `photo_count`, `property_type`, and `status`. Blank optional values receive defaults. Listings with a blank `vertical` or `vertical=stay` are eligible; other verticals are skipped.
+
+Photo records use `entity_id`, `file`, and optional `seq`, `is_cover`, `width`, `height`, and `bytes`. Listing/photo association uses a trailing numeric ID (for example, `lst_0001` matches `adv_0001`). Unreadable or missing photos do not stop the batch, but their image signals cannot contribute normally.
+
+The CLI options are:
+
+| Option          | Default                   | Meaning                                                                      |
+| --------------- | ------------------------- | ---------------------------------------------------------------------------- |
+| `--data PATH`   | repository `data/`        | Directory containing the two CSVs and referenced image files.                |
+| `--limit N`     | all records               | Maximum source listing records to consider. Non-stay records may be skipped. |
+| `--output PATH` | `output/features.parquet` | Destination Parquet file; parent folders are created automatically.          |
+
+## Output and Console Report
+
+The output table contains one row per eligible listing. Its required columns and versioning rules are documented in [CONTRACT.md](CONTRACT.md). Each row includes:
+
+- `listing_id` and the overall `quality_score`.
+- The six component scores: `photo_technical`, `photo_aesthetic`, `room_coverage`, `amenity_check`, `text_quality`, and `completeness`.
+- `photo_status`, schema/engine/config versions, and `explanation_json` with strengths, issues, suggestions, and photo flags.
+
+In the console, `SCORE` is the weighted total. Levels are `EXCELLENT` (80+), `GOOD` (65–79.9), `NEEDS WORK` (50–64.9), and `LOW` (below 50). Component abbreviations are `TECH`, `AESTH`, `ROOMS`, `AMEN`, `TEXT`, and `COMPLETE`.
+
+Photo flags distinguish the technical issue from the room classifier's guess. For example, `Below configured resolution target; room guess: living room (46% classifier confidence); 1440 x 648 px (0.93 MP)` means the image is below the configured resolution threshold, and the classifier's top room category was living room. The percentage is model confidence in that category, not photo quality or a calibrated probability. `Unknown room` means a recognized room category did not meet the confidence threshold; the top guess is shown when available. A blur flag is a separate technical signal.
+
+The configured resolution scale uses 0.3 megapixels as its minimum and 2 megapixels as its good target. The current report flags images below a normalized resolution score of 40; this is a project threshold, not a universal definition of an unusable photo. A neutral amenity score means vision was unavailable, not that declared amenities were visually confirmed.
+
+To inspect or validate an output file:
+
+```powershell
+python scripts\show_features.py --path .\output\features.parquet
+python scripts\validate_feature_table.py .\output\features.parquet
+```
+
+The validator checks required columns, unique/non-empty IDs, numeric score ranges and finiteness, explanation JSON, and weight configuration. It validates table structure, not model accuracy.
+
+## Evaluation Utilities
+
+Evaluation scripts operate on locally prepared labels. Keep the labels and images private and use the approved project workflow.
+
+Room-label CSV format:
 
 ```csv
 photo_file,label
 photos/adv_0001/photo1.jpg,bedroom
 ```
 
-Blur labels CSV format uses the same `photo_file,label` columns, with labels such as `blurry` and `sharp`. Example commands:
+Blur labels use the same columns, with values such as `blurry` and `sharp`. Run the room classifier and the combined evaluation gates with:
 
 ```powershell
 python scripts\evaluate_room_classifier.py .\private-eval\room_labels.csv --photos-root .\data
 python scripts\evaluate_quality_gates.py --room-labels .\private-eval\room_labels.csv --blur-labels .\private-eval\blur_labels.csv --photos-root .\data
 ```
 
-The gate utility reports room accuracy and blur precision/recall; compare those results with the brief's targets of at least 85% room accuracy and 90% blur precision. It does not by itself create the held-out datasets or establish that targets have passed.
+The brief's evaluation targets are at least 85% room accuracy and 90% blur precision. The scripts calculate metrics; a target is not considered achieved until it has been measured on an appropriate held-out labeled set.
 
-For aesthetic calibration, collect the planned human ratings first. The calibration CSV needs `photo_file` and either `avg_rating` or both `rater1` and `rater2` columns. Then run:
+The aesthetic calibration tool accepts `photo_file` plus either `avg_rating` or both `rater1` and `rater2`:
 
 ```powershell
 python scripts\calibrate_aesthetic_model.py --csv .\private-eval\aesthetic_ratings.csv
 ```
 
-The default calibration artifact is `artifacts/aesthetic_calibrator.yaml`. Do not claim calibration or independent two-rater agreement until those ratings have been collected and reviewed. Human ranking correlation for 30 listings and Moroccan-interior error analysis remain separate evaluation tasks.
+It writes `artifacts/aesthetic_calibrator.yaml` by default. No rating data or evaluation results are included in this repository.
+
+## Scope and Limitations
+
+This repository implements the Python **Project A** quality engine only. It does not include Project B's TypeScript ranking library or its synthetic event generator, golden-query harness, replay tool, or demo UI.
+
+The current aesthetic component is a heuristic, not a pretrained aesthetic predictor validated against human ratings. The room-classifier fallback uses filename hints, not a classifier trained on cached embeddings. Evaluation tools are present, but this repository does not contain labeled sets or evidence that the 85% room-accuracy and 90% blur-precision targets have passed. It also does not contain the brief's two-rater ranking comparison for 30 listings or Moroccan-interior error analysis.
+
+There is one weight-allocation discrepancy to clarify against the project brief: the current weights assign 20 technical + 15 aesthetic + 10 room coverage + 10 amenity check = **55 points** to photo/image-related components, while the brief says photo signals carry 40 points. The current configuration is recorded as-is; the weight allocation should be confirmed before describing it as final.
 
 ## Data Handling
 
-The internship brief requires private repositories and local handling of the anonymized listing/photo package. Do not make this repository public, commit raw data or photos, attempt re-identification, or upload listing content to public model hubs or third-party labeling services. OpenCLIP downloads pretrained model weights from the Hugging Face Hub; inference is local. Generated feature tables, evaluation labels, calibrated artifacts, and model artifacts derived from Trevo data must also remain private and be handled under the project's retention/deletion rules.
+Keep this repository private. Do not commit raw listing data or photos, attempt re-identification, or upload Trevo listing content to public repositories, public model hubs, or third-party labeling services. OpenCLIP downloads pretrained model weights; model inference runs locally. Treat generated feature tables, evaluation labels, calibration files, and any artifacts derived from Trevo data as private, and follow the project's retention/deletion requirements.
 
 ## Repository Layout
 
 ```text
-config/                  Weights, thresholds, labels/prompts, model settings
+config/                  Weights, thresholds, model settings, and prompts
 data/                    Private local input CSVs and photos; not tracked by Git
 output/                  Generated feature tables; not tracked by Git
-scripts/                 Scoring support, profiling, calibration, evaluation, validation
-src/quality_engine/      Python Project A implementation
-tests/                   Automated code tests
-CONTRACT.md              Project A feature-table contract
-pyproject.toml           Package and development-tool configuration
+scripts/                 Profiling, calibration, evaluation, display, validation
+src/quality_engine/      Project A ingestion, features, scoring, and CLI
+tests/                   Automated tests
+CONTRACT.md              Feature-table interface and versioning rules
+pyproject.toml           Package metadata and tool configuration
 ```
-
-## Scope and Remaining Work
-
-This repository is intended to deliver the Project A quality feature table that Project B can consume. Project B's ranking pipeline and its behavioral features are a separate project and are not implemented here. Before presenting Project A as matching the brief, the priority items are:
-
-1. Confirm and resolve the 40-point photo-weight requirement against the current 55-point image-related weighting; update the config and versioned contract only after the intended allocation is agreed.
-2. Replace or explicitly approve the heuristic aesthetic baseline, then collect the planned roughly 200 photos with independent ratings from two raters, calibrate, and report held-out results.
-3. Build held-out room and blur label sets, report the 85% and 90% gates, and implement the cached-embedding classifier fallback if room accuracy misses its target.
-4. Complete the 30-listing/two-rater ranking sanity check and document Moroccan-interior error analysis.
-5. Run and validate the full dataset to demonstrate that every eligible listing has one valid output row.
-
-Passing unit tests, lint, and feature-table validation verifies software behavior and table structure; it does not prove these model and human-evaluation requirements have been met.
